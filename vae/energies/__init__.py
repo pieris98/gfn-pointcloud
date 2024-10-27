@@ -1,1 +1,1 @@
-from .vae_energy import VAEEnergy
+from .vae_energy import VAEEnergy,VAEEnergyPointCloud

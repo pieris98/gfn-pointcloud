@@ -28,7 +28,7 @@ parser.add_argument('--hidden_dim', type=int, default=64)
 parser.add_argument('--s_emb_dim', type=int, default=64)
 parser.add_argument('--t_emb_dim', type=int, default=64)
 parser.add_argument('--harmonics_dim', type=int, default=64)
-parser.add_argument('--batch_size', type=int, default=300)
+parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--buffer_size', type=int, default=300 * 100 * 2)
 parser.add_argument('--T', type=int, default=100)
 parser.add_argument('--epochs', type=int, default=25000)
@@ -36,7 +36,7 @@ parser.add_argument('--subtb_lambda', type=int, default=2)
 parser.add_argument('--t_scale', type=float, default=5.)
 parser.add_argument('--log_var_range', type=float, default=4.)
 parser.add_argument('--energy', type=str, default='vae',
-                    choices=('vae'))
+                    choices=('vae','vae_pointcloud'))
 parser.add_argument('--mode_fwd', type=str, default="tb", choices=('tb', 'tb-avg', 'db', 'subtb', 'cond-tb-avg'))
 parser.add_argument('--mode_bwd', type=str, default="tb", choices=('tb', 'tb-avg', 'mle', 'cond-tb-avg'))
 parser.add_argument('--both_ways', action='store_true', default=False)
@@ -134,6 +134,8 @@ if args.local_search:
 def get_energy():
     if args.energy == 'vae':
         energy = VAEEnergy(device=device, batch_size=args.batch_size)
+    elif args.energy == 'vae_pointcloud':
+        energy = VAEEnergyPointCloud(device=device, batch_size=args.batch_size)
     else:
         return NotImplementedError
     return energy
@@ -162,7 +164,28 @@ def plot_step(energy, gfn_model, name):
         return {"visualization/real_data": wandb.Image(fig_to_image(fig_real_data)),
                 "visualization/vae_samples": wandb.Image(fig_to_image(fig_vae_samples)),
                 "visualization/gfn_samples": wandb.Image(fig_to_image(fig_gfn_samples))}
+    elif args.energy == 'vae_pointcloud':
+        batch_size = plot_data_size
+        real_data = energy.sample_evaluation_subset(batch_size)
 
+        fig_real_data, ax_real_data = get_vae_pointclouds(real_data.detach().cpu())
+
+        vae_samples_mu, vae_samples_logvar = energy.vae.encode(real_data)
+        vae_z = energy.vae.reparameterize(vae_samples_mu, vae_samples_logvar)
+        vae_samples = energy.vae.decode(vae_z)
+        fig_vae_samples, ax_vae_samples = get_vae_pointclouds(vae_samples.detach().cpu())
+
+        gfn_samples_z = gfn_model.sample(batch_size, energy.log_reward, real_data)
+        gfn_samples = energy.vae.decode(gfn_samples_z)
+        fig_gfn_samples, ax_gfn_samples = get_vae_pointclouds(gfn_samples.detach().cpu())
+
+        fig_real_data.savefig(f'{name}real_data.pdf', bbox_inches='tight')
+        fig_vae_samples.savefig(f'{name}vae_samples.pdf', bbox_inches='tight')
+        fig_gfn_samples.savefig(f'{name}gfn_samples.pdf', bbox_inches='tight')
+
+        return {"visualization/real_data": wandb.Image(fig_to_image(fig_real_data)),
+                "visualization/vae_samples": wandb.Image(fig_to_image(fig_vae_samples)),
+                "visualization/gfn_samples": wandb.Image(fig_to_image(fig_gfn_samples))}
     else:
         return {}
 
@@ -278,6 +301,9 @@ def train():
     if args.energy == 'vae':
         eval_data = energy.sample(eval_data_size, evaluation=True).to(device)
         final_eval_data = energy.sample(final_eval_data_size, evaluation=True).to(device)
+    elif args.energy == 'vae_pointcloud':
+        eval_data = energy.sample(eval_data_size).to(device)
+        final_eval_data = energy.sample(final_eval_data_size).to(device)
     else:
         eval_data = energy.sample(eval_data_size).to(device)
         final_eval_data = energy.sample(
@@ -320,7 +346,7 @@ def train():
                              rank_weight=args.rank_weight, prioritized=args.prioritized)
     gfn_model.train()
     for i in trange(args.epochs + 1):
-        if args.energy == 'vae':
+        if args.energy == 'vae' or args.energy == 'vae_pointcloud':
             condition = energy.sample(args.batch_size)
         else:
             condition = None
@@ -332,7 +358,7 @@ def train():
         if args.scheduler == True:
             scheduler.step()
         if i % 100 == 0:
-            if args.energy == 'vae':
+            if args.energy == 'vae' or args.energy == 'vae_pointcloud':
                 condition = energy.sample(eval_data_size, evaluation=True)
             else:
                 condition = None
@@ -354,7 +380,7 @@ def train():
                     'loss': metrics['train/loss'],
                 }, f'{name}model.pt')
 
-    if args.energy == 'vae':
+    if args.energy == 'vae' or args.energy == 'vae_pointcloud':
         condition = energy.sample(eval_data_size, evaluation=True)
     else:
         condition = None

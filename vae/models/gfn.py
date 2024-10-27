@@ -52,7 +52,7 @@ class GFN(nn.Module):
         self.vae = True if energy == 'vae' else False
 
         self.t_model = TimeEncodingVAE(harmonics_dim, t_dim, hidden_dim)
-        self.s_model = StateEncodingVAE(dim, 784, hidden_dim, s_emb_dim, num_layers=2)
+        self.s_model = StateEncodingVAE(dim, 6144, hidden_dim, s_emb_dim, num_layers=2)
         self.joint_model = JointPolicyVAE(dim, s_emb_dim, t_dim, hidden_dim, 2 * dim, joint_layers, zero_init)
         if learn_pb:
             self.back_model = JointPolicyVAE(dim, s_emb_dim, t_dim, hidden_dim, 2 * dim, joint_layers, zero_init)
