@@ -11,6 +11,135 @@ from torch_geometric.datasets import ModelNet
 from torch_geometric.transforms import Compose, SamplePoints, NormalizeScale
 from torch.utils.data import DataLoader
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Normal
+
+from .vae_utils import load_modelnet
+
+class VAEPointCloud(nn.Module):
+    def __init__(self, num_points=2048, latent_dim=128, hidden_dim=512):
+        super(VAEPointCloud, self).__init__()
+        self.num_points = num_points
+        self.latent_dim = latent_dim
+        self.hidden_dim = hidden_dim
+        
+        # Encoder
+        self.encoder = nn.Sequential(
+            # Point-wise features
+            nn.Conv1d(3, 64, 1),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Conv1d(64, 128, 1),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Conv1d(128, 256, 1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            
+            # Global features
+            nn.Conv1d(256, hidden_dim, 1),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU()
+        )
+        
+        # Latent space projections
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_var = nn.Linear(hidden_dim, latent_dim)
+        
+        # Decoder
+        self.decoder_fc = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1024),
+            nn.ReLU()
+        )
+        
+        self.decoder_conv = nn.Sequential(
+            nn.Conv1d(1024, 512, 1),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Conv1d(512, 256, 1),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Conv1d(256, 3, 1)
+        )
+        
+    def encode(self, x):
+        # x shape: (batch_size, 3, num_points)
+        batch_size = x.size(0)
+        
+        # Extract features
+        features = self.encoder(x)
+        
+        # Global max pooling
+        features = torch.max(features, dim=2)[0]
+        
+        # Get latent parameters
+        mu = self.fc_mu(features)
+        log_var = self.fc_var(features)
+        
+        return mu, log_var
+    
+    def reparameterize(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+    
+    def decode(self, z):
+        batch_size = z.size(0)
+        
+        # Generate initial point features
+        features = self.decoder_fc(z)
+        features = features.view(batch_size, 1024, 1)
+        features = features.repeat(1, 1, self.num_points)
+        
+        # Generate point cloud
+        points = self.decoder_conv(features)
+        return points
+    
+    def forward(self, x):
+        mu, log_var = self.encode(x)
+        z = self.reparameterize(mu, log_var)
+        reconstruction = self.decode(z)
+        return reconstruction, mu, log_var
+    
+    def loss_function(self, reconstruction, x, mu, log_var, beta=1.0):
+        """
+        Compute the VAE loss with Chamfer Distance and KL divergence
+        """
+        batch_size = x.size(0)
+        
+        # Chamfer Distance
+        x_expanded = x.unsqueeze(2)  # (B, 3, 1, N)
+        reconstruction_expanded = reconstruction.unsqueeze(3)  # (B, 3, N, 1)
+        
+        # Compute pairwise distances
+        dist = torch.sum((x_expanded - reconstruction_expanded) ** 2, dim=1)  # (B, N, N)
+        
+        # Compute bidirectional Chamfer distance
+        chamfer_dist = torch.mean(torch.min(dist, dim=1)[0]) + torch.mean(torch.min(dist, dim=2)[0])
+        
+        # KL divergence
+        kl_div = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+        kl_div = kl_div / batch_size
+        
+        # Total loss
+        loss = chamfer_dist + beta * kl_div
+        
+        return loss, chamfer_dist, kl_div
+
+    def generate(self, num_samples=1):
+        """
+        Generate new point clouds from random latent vectors
+        """
+        device = next(self.parameters()).device
+        z = torch.randn(num_samples, self.latent_dim).to(device)
+        return self.decode(z)
+    
 class PointNetEncoder(nn.Module):
     def __init__(self, latent_dim=128):
         super(PointNetEncoder, self).__init__()
@@ -53,9 +182,9 @@ class PointNetDecoder(nn.Module):
         return x
 
 
-class VAEPointCloud(nn.Module):
+class VAEPointCloudOLD(nn.Module):
     def __init__(self, latent_dim=128):
-        super(VAEPointCloud, self).__init__()
+        super(VAEPointCloudOLD, self).__init__()
         self.encoder = PointNetEncoder(latent_dim)
         self.decoder = PointNetDecoder(latent_dim)
 
@@ -76,142 +205,72 @@ class VAEPointCloud(nn.Module):
         return mu,logvar
     
     def decode(self, z):
-        z = self.decoder(z)              # (batch_size, 3*2048)
-        z = z.view(-1, 3 * 2048)        # (batch_size, 3, 2048)
+        z = self.decoder(z)              # (batch_size, 3, 2048)
+        z = z.view(-1, 3 * 2048)        # (batch_size, 3 * 2048=6144)
         return torch.sigmoid(z)
+    
 
-def chamfer_distance(pc1, pc2):
-    """
-    Compute Chamfer Distance between two point clouds.
     
-    Args:
-        pc1: Tensor of shape (batch_size, num_points, 3)
-        pc2: Tensor of shape (batch_size, num_points, 3)
+    def loss_function(self,recon_x, x, mu, logvar):
+        """
+        Compute the VAE loss function with Chamfer Distance.
+        
+        Args:
+            recon_x: Reconstructed point cloud (batch_size, 3, 2048)
+            x: Original point cloud (batch_size, 3, 2048)
+            mu: Mean from the encoder's latent space
+            logvar: Log variance from the encoder's latent space
+        
+        Returns:
+            Total loss as a scalar tensor
+        """
+        # Transpose to (batch_size, num_points, coordinates)
+        recon_x = recon_x.permute(0, 2, 1)  # (batch_size, 2048, 3)
+        x = x.permute(0, 2, 1)              # (batch_size, 2048, 3)
+        
+        # Compute Chamfer Distance
+        chamfer = self.chamfer_distance(recon_x, x)
+        
+        # Compute KL Divergence
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
+        
+        return chamfer + KLD
     
-    Returns:
-        chamfer_dist: Scalar tensor representing the Chamfer Distance
-    """
-    # Expand dimensions to compute pairwise distances
-    pc1_expand = pc1.unsqueeze(2)  # (batch_size, num_points, 1, 3)
-    pc2_expand = pc2.unsqueeze(1)  # (batch_size, 1, num_points, 3)
-    
-    # Compute pairwise distances
-    dist = torch.norm(pc1_expand - pc2_expand, dim=3)  # (batch_size, num_points, num_points)
-    
-    # For each point in pc1, find the nearest point in pc2
-    min_dist_pc1, _ = dist.min(dim=2)  # (batch_size, num_points)
-    
-    # For each point in pc2, find the nearest point in pc1
-    min_dist_pc2, _ = dist.min(dim=1)  # (batch_size, num_points)
-    
-    # Average the minimal distances
-    chamfer_dist = (min_dist_pc1.mean(dim=1) + min_dist_pc2.mean(dim=1)).mean()
-    
-    return chamfer_dist
-
-def loss_function(recon_x, x, mu, logvar):
-    """
-    Compute the VAE loss function with Chamfer Distance.
-    
-    Args:
-        recon_x: Reconstructed point cloud (batch_size, 3, 2048)
-        x: Original point cloud (batch_size, 3, 2048)
-        mu: Mean from the encoder's latent space
-        logvar: Log variance from the encoder's latent space
-    
-    Returns:
-        Total loss as a scalar tensor
-    """
-    # Transpose to (batch_size, num_points, coordinates)
-    recon_x = recon_x.permute(0, 2, 1)  # (batch_size, 2048, 3)
-    x = x.permute(0, 2, 1)              # (batch_size, 2048, 3)
-    
-    # Compute Chamfer Distance
-    chamfer = chamfer_distance(recon_x, x)
-    
-    # Compute KL Divergence
-    KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
-    
-    return chamfer + KLD
-
-
-def load_modelnet(num_points=2048, batch_size=32, num_classes=10):
-    """
-    Load the ModelNet dataset using PyTorch Geometric.
-    
-    Args:
-        num_points (int): Number of points to sample from each mesh
-        batch_size (int): Batch size for the data loader
-        num_classes (int): Number of classes (10 or 40)
-    
-    Returns:
-        train_loader: DataLoader for training data
-        test_loader: DataLoader for test data
-    """
-    # Define the transformations
-    transforms = Compose([
-        SamplePoints(num_points, include_normals=True),
-        NormalizeScale()
-    ])
-
-    # Load training dataset
-    train_dataset = ModelNet(
-        root='data/ModelNet{}'.format(num_classes),
-        name=str(num_classes),
-        train=True,
-        transform=transforms
-    )
-
-    # Load test dataset
-    test_dataset = ModelNet(
-        root='data/ModelNet{}'.format(num_classes),
-        name=str(num_classes),
-        train=False,
-        transform=transforms
-    )
-
-    class PointCloudDataset(torch.utils.data.Dataset):
-        def __init__(self, dataset):
-            self.dataset = dataset
-
-        def __len__(self):
-            return len(self.dataset)
-
-        def __getitem__(self, idx):
-            data = self.dataset[idx]
-            # Extract xyz coordinates and reshape to (3, num_points)
-            points = data.pos.T  # Transpose from (num_points, 3) to (3, num_points)
-            return points, data.y
-
-    # Wrap the datasets with our custom dataset class
-    train_dataset = PointCloudDataset(train_dataset)
-    test_dataset = PointCloudDataset(test_dataset)
-
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
-
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True
-    )
-
-    return train_loader, test_loader
+    def chamfer_distance(self,pc1, pc2):
+        """
+        Compute Chamfer Distance between two point clouds.
+        
+        Args:
+            pc1: Tensor of shape (batch_size, num_points, 3)
+            pc2: Tensor of shape (batch_size, num_points, 3)
+        
+        Returns:
+            chamfer_dist: Scalar tensor representing the Chamfer Distance
+        """
+        # Expand dimensions to compute pairwise distances
+        pc1_expand = pc1.unsqueeze(2)  # (batch_size, num_points, 1, 3)
+        pc2_expand = pc2.unsqueeze(1)  # (batch_size, 1, num_points, 3)
+        
+        # Compute pairwise distances
+        dist = torch.norm(pc1_expand - pc2_expand, dim=3)  # (batch_size, num_points, num_points)
+        
+        # For each point in pc1, find the nearest point in pc2
+        min_dist_pc1, _ = dist.min(dim=2)  # (batch_size, num_points)
+        
+        # For each point in pc2, find the nearest point in pc1
+        min_dist_pc2, _ = dist.min(dim=1)  # (batch_size, num_points)
+        
+        # Average the minimal distances
+        chamfer_dist = (min_dist_pc1.mean(dim=1) + min_dist_pc2.mean(dim=1)).mean()
+        
+        return chamfer_dist
 
 # Modified training function to use the ModelNet loaders
 def train_vae_with_modelnet(epochs=100, batch_size=32, log_interval=10):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     # Initialize the VAE model
-    model = VAEPointCloud(latent_dim=128).to(device)
+    model = VAEPointCloud(latent_dim=128,hidden_dim=512).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
     
     # Load ModelNet data
@@ -231,8 +290,12 @@ def train_vae_with_modelnet(epochs=100, batch_size=32, log_interval=10):
             data = data.to(device)
             optimizer.zero_grad()
             recon_batch, mu, logvar = model(data)
-            loss = loss_function(recon_batch, data, mu, logvar)
+            # Unpack the tuple returned by loss_function
+            loss, chamfer_dist, kl_div = model.loss_function(recon_batch, data, mu, logvar)
+            
+            # Backpropagate the loss
             loss.backward()
+
             train_loss += loss.item()
             optimizer.step()
             
@@ -252,8 +315,9 @@ def train_vae_with_modelnet(epochs=100, batch_size=32, log_interval=10):
             for i, (data, _) in enumerate(test_loader):
                 data = data.to(device)
                 recon, mu, logvar = model(data)
-                test_loss += loss_function(recon, data, mu, logvar).item()
-                
+                # Unpack the tuple returned by loss_function
+                loss, chamfer_dist, kl_div = model.loss_function(recon, data, mu, logvar)
+                test_loss += loss
                 if i == 0:
                     # Save the first batch of reconstructions
                     comparison = torch.cat([data[:8], recon[:8]])
@@ -277,7 +341,7 @@ def train_vae_with_modelnet(epochs=100, batch_size=32, log_interval=10):
         if epoch % log_interval == 0:
             with torch.no_grad():
                 sample = torch.randn(64, 128).to(device)
-                sample = model.decoder(sample).cpu()
+                sample = model.decode(sample).cpu()
                 torch.save(sample, f'vae_training_data/modelnet_sample_{epoch + 1}.pt')
         
         # Save model checkpoint

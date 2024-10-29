@@ -144,7 +144,7 @@ def get_energy():
 def plot_step(energy, gfn_model, name):
     if args.energy == 'vae':
         batch_size = plot_data_size
-        real_data = energy.sample_evaluation_subset(batch_size)
+        real_data = energy.sample_evaluation_subset(batch_size).view(-1, 3, 2048)
 
         fig_real_data, ax_real_data = get_vae_images(real_data.detach().cpu())
 
@@ -170,7 +170,7 @@ def plot_step(energy, gfn_model, name):
 
         fig_real_data, ax_real_data = get_vae_pointclouds(real_data.detach().cpu())
 
-        vae_samples_mu, vae_samples_logvar = energy.vae.encode(real_data)
+        vae_samples_mu, vae_samples_logvar = energy.vae.encode(real_data.view(-1, 3, 2048))
         vae_z = energy.vae.reparameterize(vae_samples_mu, vae_samples_logvar)
         vae_samples = energy.vae.decode(vae_z)
         fig_vae_samples, ax_vae_samples = get_vae_pointclouds(vae_samples.detach().cpu())

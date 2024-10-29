@@ -5,6 +5,79 @@ import math
 import PIL
 
 from gflownet_losses import *
+from torch_geometric.datasets import ModelNet
+from torch_geometric.transforms import Compose, SamplePoints, NormalizeScale
+from torch.utils.data import DataLoader
+def load_modelnet(num_points=2048, batch_size=32, num_classes=10):
+    """
+    Load the ModelNet dataset using PyTorch Geometric.
+    
+    Args:
+        num_points (int): Number of points to sample from each mesh
+        batch_size (int): Batch size for the data loader
+        num_classes (int): Number of classes (10 or 40)
+    
+    Returns:
+        train_loader: DataLoader for training data
+        test_loader: DataLoader for test data
+    """
+    # Define the transformations
+    transforms = Compose([
+        SamplePoints(num_points, include_normals=True),
+        NormalizeScale()
+    ])
+
+    # Load training dataset
+    train_dataset = ModelNet(
+        root='data/ModelNet{}'.format(num_classes),
+        name=str(num_classes),
+        train=True,
+        transform=transforms
+    )
+
+    # Load test dataset
+    test_dataset = ModelNet(
+        root='data/ModelNet{}'.format(num_classes),
+        name=str(num_classes),
+        train=False,
+        transform=transforms
+    )
+
+    class PointCloudDataset(torch.utils.data.Dataset):
+        def __init__(self, dataset):
+            self.dataset = dataset
+
+        def __len__(self):
+            return len(self.dataset)
+
+        def __getitem__(self, idx):
+            data = self.dataset[idx]
+            # Extract xyz coordinates and reshape to (3, num_points)
+            points = data.pos.T  # Transpose from (num_points, 3) to (3, num_points)
+            return points, data.y
+
+    # Wrap the datasets with our custom dataset class
+    train_dataset = PointCloudDataset(train_dataset)
+    test_dataset = PointCloudDataset(test_dataset)
+
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    return train_loader, test_loader
 
 
 def set_seed(seed):

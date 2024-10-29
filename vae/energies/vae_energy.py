@@ -100,8 +100,9 @@ class VAEEnergyPointCloud():
     def log_prob(self, z, x):
         log_prior = log_standard_normal(z)
         x_hat = self.vae.decode(z)
+        x_hat = x_hat.view(-1, 3 * 2048)
         # print('x shape:',x.shape, 'xhat shape:',x_hat.shape,'\n\n\n')
-        log_likelihood = log_bernoulli(x, x_hat)
+        log_likelihood = log_bernoulli(x.view(z.size(0), 3* 2048), x_hat)
 
         return - (log_prior + log_likelihood)
 
@@ -125,10 +126,10 @@ class VAEEnergyPointCloud():
         return real_data
 
     def sample_evaluation_subset(self, batch_size):
-        real_data = self.evaluation_subset[:batch_size].reshape((-1, 2048*3))
+        real_data = self.evaluation_subset[:batch_size].reshape((-1, 2048 * 3))
         return real_data
 
     def sample(self, batch_size, evaluation=False):
         if evaluation:
-            return self.sample_evaluation_subset(batch_size).to(self.device)
-        return self.sample_train_set(batch_size).to(self.device)
+            return self.sample_evaluation_subset(batch_size).to(self.device).view(-1, 3* 2048)
+        return self.sample_train_set(batch_size).to(self.device).view(-1, 3* 2048)

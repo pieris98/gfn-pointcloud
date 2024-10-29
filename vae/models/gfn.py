@@ -49,7 +49,7 @@ class GFN(nn.Module):
         self.log_var_range = log_var_range
         self.device = device
 
-        self.vae = True if energy == 'vae' else False
+        self.vae = True if energy == 'vae' or energy == 'vae_pointcloud' else False
 
         self.t_model = TimeEncodingVAE(harmonics_dim, t_dim, hidden_dim)
         self.s_model = StateEncodingVAE(dim, 6144, hidden_dim, s_emb_dim, num_layers=2)

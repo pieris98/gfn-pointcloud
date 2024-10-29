@@ -11,7 +11,78 @@ logtwopi = math.log(2 * math.pi)
 
 _VAE_DATA_PATH = 'energies/data/'
 _MNIST_EVALUATION_SUBSET = 'energies/data/mnist_evaluation_subset.npy'
+
 _VAEP_DATA_PATH_POINTCLOUD = 'energies/data/ModelNet10'
+def load_modelnet(num_points=2048, batch_size=32, num_classes=10):
+    """
+    Load the ModelNet dataset using PyTorch Geometric.
+    
+    Args:
+        num_points (int): Number of points to sample from each mesh
+        batch_size (int): Batch size for the data loader
+        num_classes (int): Number of classes (10 or 40)
+    
+    Returns:
+        train_loader: DataLoader for training data
+        test_loader: DataLoader for test data
+    """
+    # Define the transformations
+    transforms = Compose([
+        SamplePoints(num_points, include_normals=True),
+        NormalizeScale()
+    ])
+
+    # Load training dataset
+    train_dataset = ModelNet(
+        root='data/ModelNet{}'.format(num_classes),
+        name=str(num_classes),
+        train=True,
+        transform=transforms
+    )
+
+    # Load test dataset
+    test_dataset = ModelNet(
+        root='data/ModelNet{}'.format(num_classes),
+        name=str(num_classes),
+        train=False,
+        transform=transforms
+    )
+
+    class PointCloudDataset(torch.utils.data.Dataset):
+        def __init__(self, dataset):
+            self.dataset = dataset
+
+        def __len__(self):
+            return len(self.dataset)
+
+        def __getitem__(self, idx):
+            data = self.dataset[idx]
+            # Extract xyz coordinates and reshape to (3, num_points)
+            points = data.pos.T  # Transpose from (num_points, 3) to (3, num_points)
+            return points, data.y
+
+    # Wrap the datasets with our custom dataset class
+    train_dataset = PointCloudDataset(train_dataset)
+    test_dataset = PointCloudDataset(test_dataset)
+
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    return train_loader, test_loader
 
 def gaussian_likelihood(x_hat, logscale, x):
     scale = torch.exp(logscale)
@@ -39,7 +110,7 @@ def log_bernoulli(x, p):
 
 
 def estimate_distribution(model):
-    distribution = torch.distributions.MultivariateNormal(torch.zeros(20), torch.eye(20))
+    distribution = torch.distributions.MultivariateNormal(torch.zeros(128), torch.eye(128))
     # z_samples = distribution.sample((100000,)).to(device)
     z_samples = distribution.sample((100000,))
     x_prediction_samples = model.decode(z_samples)
