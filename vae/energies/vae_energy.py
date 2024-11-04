@@ -3,13 +3,14 @@ from PIL import Image
 
 import matplotlib.pyplot as plt
 from .vae import VAE
-from .vae_pointcloud import VAEPointCloud
+from .vae_pointcloud import VAEPointCloud, PointNetVAE
 from .vae_utils import log_standard_normal, log_bernoulli, get_dataloaders, get_pointcloud_dataloaders
 
 # _VAE_MODEL_PATH = '<path to a pretrained VAE model>'
 
-_VAE_MODEL_PATH = 'energies/vae_training_data/modelnet_vae_final.pt'
-# _VAE_MODEL_PATH = 'energies/data/mnist_vae_100_epochs_seed_1_mps.pt'
+# _VAE_POINTCLOUD_MODEL_PATH = 'energies/vae_training_data/modelnet_vae_final.pt'
+_VAE_POINTCLOUD_MODEL_PATH = 'energies/vae_pointnet_training_data/modelnet_vae_final.pt'
+_VAE_MODEL_PATH = 'energies/data/mnist_vae_100_epochs_seed_1_mps.pt'
 
 
 class VAEEnergy():
@@ -90,8 +91,10 @@ class VAEEnergyPointCloud():
 
         self.evaluation_subset = evaluation_subset.to(self.device)
 
-        self.vae = VAEPointCloud().to(self.device)
-        self.vae.load_state_dict(torch.load(_VAE_MODEL_PATH))
+        # self.vae = VAEPointCloud().to(self.device)
+        # self.vae = VAEPointCloudOLD().to(self.device)
+        self.vae = PointNetVAE().to(self.device)
+        self.vae.load_state_dict(torch.load(_VAE_POINTCLOUD_MODEL_PATH))
 
         # setting vae params to not requiring gradient!
         for param in self.vae.parameters():
@@ -126,7 +129,7 @@ class VAEEnergyPointCloud():
         return real_data
 
     def sample_evaluation_subset(self, batch_size):
-        real_data = self.evaluation_subset[:batch_size].reshape((-1, 2048 * 3))
+        real_data = self.evaluation_subset[:batch_size].reshape((-1, 3,2048))
         return real_data
 
     def sample(self, batch_size, evaluation=False):

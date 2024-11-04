@@ -11,7 +11,7 @@ logtwopi = math.log(2 * math.pi)
 
 
 class GFN(nn.Module):
-    def __init__(self, dim: int, s_emb_dim: int, hidden_dim: int,
+    def __init__(self, problem_dim:int,dim: int, s_emb_dim: int, hidden_dim: int,
                  harmonics_dim: int, t_dim: int, log_var_range: float = 4.,
                  t_scale: float = 1., langevin: bool = False, learned_variance: bool = True,
                  trajectory_length: int = 100, partial_energy: bool = False,
@@ -21,6 +21,7 @@ class GFN(nn.Module):
                  pis_architectures: bool = False, lgv_layers: int = 3, joint_layers: int = 2,
                  zero_init: bool = False, device=torch.device('cuda'), energy: str = None):
         super(GFN, self).__init__()
+        self.problem_dim = problem_dim
         self.dim = dim
         self.harmonics_dim = harmonics_dim
         self.t_dim = t_dim
@@ -52,7 +53,7 @@ class GFN(nn.Module):
         self.vae = True if energy == 'vae' or energy == 'vae_pointcloud' else False
 
         self.t_model = TimeEncodingVAE(harmonics_dim, t_dim, hidden_dim)
-        self.s_model = StateEncodingVAE(dim, 6144, hidden_dim, s_emb_dim, num_layers=2)
+        self.s_model = StateEncodingVAE(dim, self.problem_dim, hidden_dim, s_emb_dim, num_layers=2)
         self.joint_model = JointPolicyVAE(dim, s_emb_dim, t_dim, hidden_dim, 2 * dim, joint_layers, zero_init)
         if learn_pb:
             self.back_model = JointPolicyVAE(dim, s_emb_dim, t_dim, hidden_dim, 2 * dim, joint_layers, zero_init)

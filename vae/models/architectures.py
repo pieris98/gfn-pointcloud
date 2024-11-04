@@ -349,6 +349,8 @@ class StateEncodingVAE(nn.Module):
                                      )
 
     def forward(self, s, condition):
+        # print("s shape", s.shape)
+        # print("condition shape", condition.shape)
         return self.x_model(torch.cat([s, condition], dim=-1))
 
 

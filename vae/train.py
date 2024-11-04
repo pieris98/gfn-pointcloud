@@ -41,6 +41,7 @@ parser.add_argument('--mode_fwd', type=str, default="tb", choices=('tb', 'tb-avg
 parser.add_argument('--mode_bwd', type=str, default="tb", choices=('tb', 'tb-avg', 'mle', 'cond-tb-avg'))
 parser.add_argument('--both_ways', action='store_true', default=False)
 parser.add_argument('--repeats', type=int, default=10)
+parser.add_argument('--problem_dim', type=int, default=6144)
 
 # For local search
 ################################################################
@@ -107,6 +108,7 @@ parser.add_argument('--seed', type=int, default=12345)
 parser.add_argument('--weight_decay', type=float, default=1e-7)
 parser.add_argument('--use_weight_decay', action='store_true', default=False)
 parser.add_argument('--eval', action='store_true', default=False)
+parser.add_argument('--latent_dim', type=int, default=128)
 args = parser.parse_args()
 
 set_seed(args.seed)
@@ -135,7 +137,7 @@ def get_energy():
     if args.energy == 'vae':
         energy = VAEEnergy(device=device, batch_size=args.batch_size)
     elif args.energy == 'vae_pointcloud':
-        energy = VAEEnergyPointCloud(device=device, batch_size=args.batch_size)
+        energy = VAEEnergyPointCloud(dim=args.latent_dim, device=device, batch_size=args.batch_size)
     else:
         return NotImplementedError
     return energy
@@ -144,7 +146,7 @@ def get_energy():
 def plot_step(energy, gfn_model, name):
     if args.energy == 'vae':
         batch_size = plot_data_size
-        real_data = energy.sample_evaluation_subset(batch_size).view(-1, 3, 2048)
+        real_data = energy.sample_evaluation_subset(batch_size)
 
         fig_real_data, ax_real_data = get_vae_images(real_data.detach().cpu())
 
@@ -170,12 +172,12 @@ def plot_step(energy, gfn_model, name):
 
         fig_real_data, ax_real_data = get_vae_pointclouds(real_data.detach().cpu())
 
-        vae_samples_mu, vae_samples_logvar = energy.vae.encode(real_data.view(-1, 3, 2048))
+        vae_samples_mu, vae_samples_logvar = energy.vae.encode(real_data)#.view(-1, 3, 2048))
         vae_z = energy.vae.reparameterize(vae_samples_mu, vae_samples_logvar)
         vae_samples = energy.vae.decode(vae_z)
         fig_vae_samples, ax_vae_samples = get_vae_pointclouds(vae_samples.detach().cpu())
 
-        gfn_samples_z = gfn_model.sample(batch_size, energy.log_reward, real_data)
+        gfn_samples_z = gfn_model.sample(batch_size, energy.log_reward, real_data.view(-1, 3*2048))
         gfn_samples = energy.vae.decode(gfn_samples_z)
         fig_gfn_samples, ax_gfn_samples = get_vae_pointclouds(gfn_samples.detach().cpu())
 
@@ -314,7 +316,7 @@ def train():
     if WANDB:
         wandb.init(project="GFN Conditional Energy", config=config, name=name)
 
-    gfn_model = GFN(energy.data_ndim, args.s_emb_dim, args.hidden_dim, args.harmonics_dim, args.t_emb_dim,
+    gfn_model = GFN(problem_dim=args.problem_dim, dim=energy.data_ndim, s_emb_dim=args.s_emb_dim, hidden_dim=args.hidden_dim, harmonics_dim=args.harmonics_dim, t_dim=args.t_emb_dim,
                     trajectory_length=args.T, clipping=args.clipping, lgv_clip=args.lgv_clip, gfn_clip=args.gfn_clip,
                     langevin=args.langevin, learned_variance=args.learned_variance,
                     partial_energy=args.partial_energy, log_var_range=args.log_var_range,

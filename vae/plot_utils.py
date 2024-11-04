@@ -47,6 +47,70 @@ def get_vae_pointclouds(data_tensor):
         axs (numpy.ndarray): Array of Axes3D objects for each subplot.
     """
     # Ensure the data tensor has the correct shape
+    # data_tensor = data_tensor.reshape((-1, 3, 2048))
+    if data_tensor.shape != (data_tensor.shape[0], 3, 2048):
+        raise ValueError(f"Expected data_tensor of shape (num_pointclouds, 3, 2048), but got {data_tensor.shape}")
+
+    # Move tensor to CPU and convert to NumPy for plotting
+    data_np = data_tensor.cpu().numpy()
+
+    rows = int(np.sqrt(data_tensor.shape[0]))
+    # Create a 4x4 grid of subplots with 3D projections
+    fig, axs = plt.subplots(rows, rows, subplot_kw={'projection': '3d'}, figsize=(20, 20))
+    
+    # axs = axs.flatten()
+    # Ensure axs is always a 1D array
+    axs = np.atleast_1d(axs).flatten()
+
+    # Define axis limits based on the data range
+    all_points = data_np.transpose(0, 2, 1)
+    print(f"All points shape: {all_points.shape}")
+    x_min, x_max = all_points[:, 0].min(), all_points[:, 0].max()
+    y_min, y_max = all_points[:, 1].min(), all_points[:, 1].max()
+    z_min, z_max = all_points[:, 2].min(), all_points[:, 2].max()
+
+    # Iterate over each subplot and plot the corresponding point cloud
+    for i in range(data_tensor.shape[0]):
+        ax = axs[i]
+        point_cloud = data_np[i]
+
+        ax.scatter(point_cloud[0], point_cloud[1], point_cloud[2], 
+                   c=point_cloud[2], cmap='viridis', s=1, alpha=0.8)
+
+        # Set consistent axis limits for all subplots
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        ax.set_zlim(z_min, z_max)
+
+        # Remove axis ticks for clarity
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_zticks([])
+
+        # Optionally, set a title or identifier for each subplot
+        ax.set_title(f'Point Cloud {i+1}', fontsize=10)
+
+    plt.tight_layout()
+    return fig, axs
+
+def get_vae_pointclouds_scatter(data_tensor):
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # Although not directly used, required for 3D projection
+    import numpy as np
+    import torch
+
+    """
+    Visualize a batch of VAE-generated point clouds in a 4x4 subplot grid.
+
+    Args:
+        data_tensor (torch.Tensor): Tensor of shape (16, 3, 2048) representing the (x, y, z)
+                                    coordinates of each point in the point clouds.
+
+    Returns:
+        fig (matplotlib.figure.Figure): The matplotlib figure object containing the subplots.
+        axs (numpy.ndarray): Array of Axes3D objects for each subplot.
+    """
+    # Ensure the data tensor has the correct shape
     data_tensor = data_tensor.reshape((-1, 3, 2048))
     if data_tensor.shape != (16, 3, 2048):
         raise ValueError(f"Expected data_tensor of shape (16, 3, 2048), but got {data_tensor.shape}")
@@ -87,6 +151,8 @@ def get_vae_pointclouds(data_tensor):
 
     plt.tight_layout()
     return fig, axs
+
+
 def plot_contours(log_prob, ax=None, bounds=(-10., 10.), grid_width_n_points=200, n_contour_levels=50,
                   log_prob_min=-1000., device=torch.device('cuda')):
     """Plot contours of a log_prob_func that is defined on 2D"""

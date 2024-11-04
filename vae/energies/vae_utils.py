@@ -5,6 +5,9 @@ import math
 import torch_geometric
 import numpy as np
 
+from torch_geometric.datasets import ModelNet
+from torch_geometric.transforms import Compose, SamplePoints, NormalizeScale
+from torch.utils.data import DataLoader, Dataset
 _EPS = 1.e-5
 
 logtwopi = math.log(2 * math.pi)
@@ -13,6 +16,8 @@ _VAE_DATA_PATH = 'energies/data/'
 _MNIST_EVALUATION_SUBSET = 'energies/data/mnist_evaluation_subset.npy'
 
 _VAEP_DATA_PATH_POINTCLOUD = 'energies/data/ModelNet10'
+
+
 def load_modelnet(num_points=2048, batch_size=32, num_classes=10):
     """
     Load the ModelNet dataset using PyTorch Geometric.
@@ -84,6 +89,101 @@ def load_modelnet(num_points=2048, batch_size=32, num_classes=10):
 
     return train_loader, test_loader
 
+def load_modelnet_chair(num_points=2048, batch_size=32, num_workers=4, pin_memory=True):
+    """
+    Load the ModelNet10 dataset filtered to include only the 'chair' class using PyTorch Geometric.
+    
+    Args:
+        num_points (int): Number of points to sample from each mesh.
+        batch_size (int): Batch size for the data loaders.
+        num_workers (int): Number of subprocesses to use for data loading.
+        pin_memory (bool): If True, the data loader will copy Tensors into CUDA pinned memory.
+
+    Returns:
+        train_loader (DataLoader): DataLoader for training data containing only 'chair' samples.
+        test_loader (DataLoader): DataLoader for test data containing only 'chair' samples.
+    """
+    # Define the transformations
+    transforms = Compose([
+        SamplePoints(num_points, include_normals=True),
+        NormalizeScale()
+    ])
+
+    # Initialize the ModelNet10 dataset for training and testing
+    full_train_dataset = ModelNet(
+        root='data/ModelNet10',
+        name='10',
+        train=True,
+        transform=transforms
+    )
+
+    full_test_dataset = ModelNet(
+        root='data/ModelNet10',
+        name='10',
+        train=False,
+        transform=transforms
+    )
+
+    # Retrieve the list of categories from the ModelNet10 dataset
+    categories = sorted(full_train_dataset.raw_file_names)
+    
+    # Ensure 'chair' is one of the categories
+    if 'chair' not in categories:
+        raise ValueError("The 'chair' class was not found in the ModelNet10 dataset.")
+
+    # Get the label index for the 'chair' class
+    chair_label = categories.index('chair')
+
+    class ChairDataset(Dataset):
+        """Custom Dataset to include only 'chair' samples."""
+        def __init__(self, dataset, label):
+            self.label = label
+            self.indices = [i for i, data in enumerate(dataset) if data.y.item() == self.label]
+            self.dataset = dataset
+
+        def __len__(self):
+            return len(self.indices)
+
+        def __getitem__(self, idx):
+            data = self.dataset[self.indices[idx]]
+            # Extract xyz coordinates and reshape to (3, num_points)
+            points = data.pos.T  # Transpose from (num_points, 3) to (3, num_points)
+            return points, data.y
+
+    # Create Chair-specific datasets for training and testing
+    chair_train_dataset = ChairDataset(full_train_dataset, chair_label)
+    chair_test_dataset = ChairDataset(full_test_dataset, chair_label)
+
+    # Check if there are any 'chair' samples
+    if len(chair_train_dataset) == 0:
+        raise ValueError("No training samples found for the 'chair' class.")
+    if len(chair_test_dataset) == 0:
+        raise ValueError("No test samples found for the 'chair' class.")
+
+    # Create DataLoaders for training and testing datasets
+    train_loader = DataLoader(
+        chair_train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+
+    test_loader = DataLoader(
+        chair_test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory
+    )
+    # Create evaluation_subset from test_loader
+    evaluation_subset = []
+    for data, _ in test_loader:
+        evaluation_subset.append(data)
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    evaluation_subset = torch.cat(evaluation_subset, dim=0).to(device)
+    return train_loader, test_loader, evaluation_subset
+
 def gaussian_likelihood(x_hat, logscale, x):
     scale = torch.exp(logscale)
     mean = x_hat
@@ -109,8 +209,8 @@ def log_bernoulli(x, p):
     return log_p
 
 
-def estimate_distribution(model):
-    distribution = torch.distributions.MultivariateNormal(torch.zeros(128), torch.eye(128))
+def estimate_distribution(model, latent_dim):
+    distribution = torch.distributions.MultivariateNormal(torch.zeros(latent_dim), torch.eye(latent_dim))
     # z_samples = distribution.sample((100000,)).to(device)
     z_samples = distribution.sample((100000,))
     x_prediction_samples = model.decode(z_samples)
@@ -136,10 +236,7 @@ def get_dataloaders(batch_size, device):
 
     return train_dataloader, test_dataloader, evaluation_subset
 
-import torch
-from torch_geometric.datasets import ModelNet
-from torch_geometric.transforms import Compose, SamplePoints, NormalizeScale
-from torch.utils.data import DataLoader
+
 
 
 def get_pointcloud_dataloaders(batch_size=32, device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),root_dir=_VAEP_DATA_PATH_POINTCLOUD, num_points=2048, num_classes=10):
