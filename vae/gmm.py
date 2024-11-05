@@ -341,9 +341,11 @@ def main(root_path='ae_pointnet_training_data', latent_dim=256,batch_size=32):
 
     # Generate and evaluate samples
     print('Calculating evaluation metrics and samples...')
-    # metrics, samples = evaluate_samples(gmm, ae.decoder, test_loader, device, batch_size=batch_size)
+    
     # TRY OVERFIT CASE
-    metrics, samples = evaluate_samples(gmm, ae.decoder, train_loader, device, batch_size=batch_size)
+    # metrics, samples = evaluate_samples(gmm, ae.decoder, train_loader, device, batch_size=batch_size)
+    
+    metrics, samples = evaluate_samples(gmm, ae.decoder, evaluation_subset, device, batch_size=batch_size)
     print("Evaluation metrics:", metrics)
     
     # Compute energy for some samples
